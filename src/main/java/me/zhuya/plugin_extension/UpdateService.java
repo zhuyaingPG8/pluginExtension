@@ -44,6 +44,9 @@ final class UpdateService {
 		Map<String, Source> sources = new LinkedHashMap<>();
 		for (Plugin plugin : loadedPlugins) {
 			if (plugin.isBuiltin()) continue;
+			// This plugin cannot update itself: it cannot be disabled, and it is the code running the
+			// check. Reporting it as "no update source declared" would be pure noise.
+			if (PluginToggleService.isSelf(plugin.getID())) continue;
 			if (plugin.getInfo() == null) continue;
 			sources.putIfAbsent(plugin.getID(),
 					new Source(plugin.getID(), plugin.getPluginVersion(), plugin.getInfo().getUpdateJSONURL(),
