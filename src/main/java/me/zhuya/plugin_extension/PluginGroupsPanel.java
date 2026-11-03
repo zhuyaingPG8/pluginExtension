@@ -435,6 +435,17 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		};
 	}
 
+	/** Number of rows that have a known newer version, used for the badge in the group column. */
+	private int updateCount(List<Row> rows) {
+		if (updates.isEmpty())
+			return 0;
+		int count = 0;
+		for (Row row : rows)
+			if (updates.containsKey(row.id()))
+				count++;
+		return count;
+	}
+
 	private void showRows(List<Row> rows) {
 		detailList.removeAll();
 		pluginBoxes.clear();
@@ -605,9 +616,18 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 					enabled++;
 			}
 			JLabel label = groupLabels.get(entry.key());
-			if (label != null)
-				label.setText("<html>" + escape(entry.name()) + "<br><small>"
-						+ L10N.t("plugin_extension.counter", enabled, rows.size()) + "</small>");
+			if (label != null) {
+				// The update badge gets its own line: the group column is 150px wide, and "1/8 enabled 2 can
+				// update" does not fit next to the checkbox (measured ~123px against ~99px available).
+				StringBuilder text = new StringBuilder("<html>").append(escape(entry.name())).append("<br><small>")
+						.append(escape(L10N.t("plugin_extension.counter", enabled, rows.size()))).append("</small>");
+				int upgradable = updateCount(rows);
+				if (upgradable > 0)
+					text.append("<br><small><font color=#4ea1f7>")
+							.append(escape(L10N.t("plugin_extension.group_updates", upgradable)))
+							.append("</font></small>");
+				label.setText(text.toString());
+			}
 			JCheckBox box = groupBoxes.get(entry.key());
 			if (box != null)
 				box.setSelected(entry.locked() || all);
