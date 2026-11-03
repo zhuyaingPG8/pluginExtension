@@ -9,6 +9,7 @@
     "name": "Plugin Extension",
     "version": "2.4",
     "description": "Adds plugin groups with enable switches, and a custom element whose package path you can choose",
-    "author": "zhuyaingPG8"
+    "author": "zhuyaingPG8",
+    "pluginPageID": "124835"
   }
 }
