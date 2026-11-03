@@ -1,0 +1,64 @@
+import groovy.json.JsonSlurper
+
+plugins {
+    id "java"
+}
+
+repositories {
+    mavenCentral()
+    maven { url = "https://repo.gradle.org/gradle/libs-releases" } // for gradle-tooling-api
+    flatDir { dirs mcreator_path + '/lib' }
+}
+
+group = 'me.zhuya.plugin_extension'
+version = new JsonSlurper().parse(file('src/main/resources/plugin.json'))['info']['version']
+java.toolchain.languageVersion = JavaLanguageVersion.of(25)
+java.toolchain.vendor = JvmVendorSpec.JETBRAINS
+
+configurations {
+    implementation.extendsFrom export
+}
+
+dependencies {
+    implementation project(':MCreator')
+
+    project(':MCreator').afterEvaluate(() ->
+            project(":MCreator").configurations.named("implementation").get().dependencies.each {
+                //noinspection ForeignDelegate
+                implementation it
+            }
+    )
+}
+
+tasks.jar {
+    archiveFileName.set("pluginExtension-v${version}.zip")
+
+    from {
+        configurations.export.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+tasks.register('runMCreatorWithPlugin', JavaExec) {
+    dependsOn jar
+
+    environment("MCREATOR_PLUGINS_FOLDER", file("./build/libs"))
+
+    jvmArgs '--add-opens', 'java.base/java.lang=ALL-UNNAMED', '--enable-native-access', 'ALL-UNNAMED,jcef'
+
+    classpath = project(':MCreator').sourceSets.main.runtimeClasspath
+    mainClass.set('net.mcreator.Launcher')
+
+    workingDir = mcreator_path
+}
+
+subprojects { subproject ->
+    subproject.plugins.withType(JavaPlugin) {
+        test {
+            dependsOn rootProject.jar
+
+            environment("MCREATOR_PLUGINS_FOLDER", new File(rootProject.projectDir, "/build/libs"))
+
+            workingDir = mcreator_path
+        }
+    }
+}
