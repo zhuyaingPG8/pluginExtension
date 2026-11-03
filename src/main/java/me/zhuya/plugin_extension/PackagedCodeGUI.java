@@ -15,7 +15,6 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.File;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
@@ -44,7 +43,7 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 		targetPackage.setEditable(true);
 		ComponentUtils.deriveFont(targetPackage, 15);
 		collectPackages(mcreator.getGenerator().getGeneratorPackageRoot(), "").forEach(targetPackage::addItem);
-		targetPackage.addActionListener(e -> updateResolved());
+		targetPackage.addActionListener(_ -> updateResolved());
 		targetPackage.getEditor().getEditorComponent().addKeyListener(new KeyAdapter() {
 			@Override public void keyReleased(KeyEvent e) {
 				updateResolved();
@@ -53,7 +52,7 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 		resolved.setForeground(Theme.current().getAltForegroundColor());
 		ComponentUtils.deriveFont(resolved, 13);
 		ComponentUtils.deriveFont(classKind, 15);
-		classKind.addActionListener(e -> updateKindFields());
+		classKind.addActionListener(_ -> updateKindFields());
 		ComponentUtils.deriveFont(superClass, 15);
 		ComponentUtils.deriveFont(interfaces, 15);
 		ComponentUtils.deriveFont(recordComponents, 15);
@@ -218,7 +217,7 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 		return PackageNames.normalizeTypeList(value);
 	}
 
-	@Override public URI contextURL() throws URISyntaxException {
+	@Override public URI contextURL() {
 		return null;
 	}
 }

@@ -38,7 +38,7 @@ public final class WorkspaceFolderSupport {
 		button.setBorder(BorderFactory.createEmptyBorder(0, 3, 0, 3));
 		button.setCursor(new Cursor(Cursor.HAND_CURSOR));
 		button.setToolTipText(L10N.t(TOOLTIP));
-		button.addActionListener(event -> createFolder(mcreator, panel, button));
+		button.addActionListener(_ -> createFolder(mcreator, panel, button));
 
 		toolbar.add(button, indexAfter(toolbar, original));
 		toolbar.revalidate();

@@ -788,7 +788,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		Set<String> labels = new LinkedHashSet<>();
 		labels.add(L10N.button("action.common.apply").getText());
 		labels.add(L10N.button("dialog.preferences.save").getText());
-		ActionListener apply = e -> panel.applyChanges();
+		ActionListener apply = _ -> panel.applyChanges();
 		for (JButton button : descendantsOfType(dialog, JButton.class)) {
 			if (!labels.contains(button.getText()))
 				continue;
