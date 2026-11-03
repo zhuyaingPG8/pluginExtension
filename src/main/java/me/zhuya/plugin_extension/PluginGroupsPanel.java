@@ -47,11 +47,8 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private final List<GroupEntry> entries = new ArrayList<>();
 	private List<Plugin> loadedPlugins = new ArrayList<>();
 	private List<PluginToggleService.DisabledPlugin> parkedPlugins = new ArrayList<>();
-	// Rows are built once per reload() (each Row.of(Plugin) performs a real ZipIO.checkIfZip file open),
-	// then repartitioned cheaply by rebuild() whenever group assignments change.
 	private List<Row> loadedRows = List.of();
 	private List<Row> parkedRows = List.of();
-	// Built in rebuild(), in the original visible order, so rowsFor() never rescans the plugin lists.
 	private final Map<String, List<Row>> rowsById = new LinkedHashMap<>();
 	private List<Row> builtinRows = List.of();
 	private List<Row> ungroupedRows = List.of();
@@ -64,7 +61,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private enum Filter {
 		ALL, ENABLED, DISABLED
 	}
-
 
 	private record Row(String id, String name, String version, String author, String description, boolean loaded, boolean parked, boolean builtin, boolean manageable, File file) {
 		static Row of(Plugin plugin) {
@@ -142,30 +138,21 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 	private void reload() {
-		// Single comparator: non-builtin plugins first, then by descending weight
-		// (sorting twice was only equivalent because the second sort was stable).
-		loadedPlugins = PluginLoader.INSTANCE.getPlugins().stream()
-				.sorted(Comparator.comparing(Plugin::isBuiltin)
-						.thenComparing(Comparator.comparing(Plugin::getWeight).reversed()))
-				.toList();
+		loadedPlugins = PluginLoader.INSTANCE.getPlugins().stream().sorted(Comparator.comparing(Plugin::isBuiltin)
+						.thenComparing(Comparator.comparing(Plugin::getWeight).reversed())).toList();
 		parkedPlugins = PluginToggleService.listDisabled();
 		PluginToggleService.ensureDisabledFolder();
-		// Not persisted on purpose: only Apply/Save writes the config to disk.
 		config.disabled.removeIf(PluginToggleService::isSelf);
 		pruneMissingPlugins();
 		if (!snapshotTaken) {
 			initialDisabled.addAll(config.disabled);
 			snapshotTaken = true;
 		}
-		// Each Row.of(Plugin) opens the plugin file (isManageable -> ZipIO.checkIfZip), so the rows are
-		// built here once per reload and only repartitioned by rebuild().
 		List<Row> loaded = new ArrayList<>();
-		for (Plugin plugin : loadedPlugins)
-			loaded.add(Row.of(plugin));
+		for (Plugin plugin : loadedPlugins) loaded.add(Row.of(plugin));
 		loadedRows = loaded;
 		List<Row> parked = new ArrayList<>();
-		for (PluginToggleService.DisabledPlugin plugin : parkedPlugins)
-			parked.add(Row.of(plugin));
+		for (PluginToggleService.DisabledPlugin plugin : parkedPlugins) parked.add(Row.of(plugin));
 		parkedRows = parked;
 		rebuild();
 	}
@@ -173,20 +160,17 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private void pruneMissingPlugins() {
 		Set<String> groupable = new HashSet<>();
 		for (Plugin plugin : loadedPlugins)
-			if (!plugin.isBuiltin())
-				groupable.add(plugin.getID());
+			if (!plugin.isBuiltin()) groupable.add(plugin.getID());
 		parkedPlugins.forEach(plugin -> groupable.add(plugin.id()));
 		config.groups.forEach(group -> group.plugins.removeIf(id -> !groupable.contains(id)));
 	}
 
 	private void rebuild() {
 		entries.clear();
-		for (PluginGroupsConfig.PluginGroup group : config.groups)
-			entries.add(new GroupEntry(group.id, group.name, group, false));
+		for (PluginGroupsConfig.PluginGroup group : config.groups) entries.add(new GroupEntry(group.id, group.name, group, false));
 		entries.add(new GroupEntry(KEY_UNGROUPED, L10N.t("plugin_extension.ungrouped"), null, false));
 		entries.add(new GroupEntry(KEY_BUILTIN, L10N.t("plugin_extension.builtin"), null, true));
-		if (entries.stream().noneMatch(entry -> entry.key().equals(selectedKey)))
-			selectedKey = entries.getFirst().key();
+		if (entries.stream().noneMatch(entry -> entry.key().equals(selectedKey))) selectedKey = entries.getFirst().key();
 		rebuildIndex();
 		buildGroupColumn();
 		buildDetail();
@@ -195,34 +179,25 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		repaint();
 	}
 
-	/**
-	 * Repartitions the rows built by reload() into the lists rowsFor() reads. Group assignments change
-	 * without a reload, so this runs on every rebuild; it only touches memory (no file access).
-	 */
 	private void rebuildIndex() {
 		rowsById.clear();
 		for (Row row : loadedRows)
-			if (!row.builtin())
-				rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
-		for (Row row : parkedRows)
-			rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
+			if (!row.builtin()) rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
+		for (Row row : parkedRows) rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
 		builtinRows = loadedRows.stream().filter(Row::builtin).toList();
 		Set<String> assigned = new HashSet<>();
 		config.groups.forEach(group -> assigned.addAll(group.plugins));
 		List<Row> ungrouped = new ArrayList<>();
 		for (Row row : loadedRows)
-			if (!row.builtin() && !assigned.contains(row.id()))
-				ungrouped.add(row);
+			if (!row.builtin() && !assigned.contains(row.id())) ungrouped.add(row);
 		for (Row row : parkedRows)
-			if (!assigned.contains(row.id()))
-				ungrouped.add(row);
+			if (!assigned.contains(row.id())) ungrouped.add(row);
 		ungroupedRows = ungrouped;
 	}
 
 	private GroupEntry selectedEntry() {
 		for (GroupEntry entry : entries)
-			if (entry.key().equals(selectedKey))
-				return entry;
+			if (entry.key().equals(selectedKey)) return entry;
 		return entries.isEmpty() ? null : entries.getFirst();
 	}
 
@@ -231,8 +206,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 			List<Row> rows = new ArrayList<>();
 			for (String id : entry.group().plugins) {
 				List<Row> matches = rowsById.get(id);
-				if (matches != null)
-					rows.addAll(matches);
+				if (matches != null) rows.addAll(matches);
 			}
 			return rows;
 		}
@@ -263,8 +237,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		groupBoxes.clear();
 		groupLabels.clear();
 		groupRows.clear();
-		for (GroupEntry entry : entries)
-			groupColumn.add(createGroupRow(entry));
+		for (GroupEntry entry : entries) groupColumn.add(createGroupRow(entry));
 		groupColumn.add(Box.createVerticalGlue());
 		groupColumn.revalidate();
 		groupColumn.repaint();
@@ -281,8 +254,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 			box.setToolTipText(L10N.t("plugin_extension.group_toggle_hint"));
 		}
 		JLabel label = new JLabel();
-		label.setForeground(entry.locked() ? Theme.current().getAltForegroundColor() :
-				Theme.current().getForegroundColor());
+		label.setForeground(entry.locked() ? Theme.current().getAltForegroundColor() : Theme.current().getForegroundColor());
 		ComponentUtils.deriveFont(label, 12);
 		MouseAdapter select = new MouseAdapter() {
 			@Override public void mousePressed(MouseEvent e) {
@@ -305,8 +277,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 	private void select(GroupEntry entry) {
-		if (entry.key().equals(selectedKey))
-			return;
+		if (entry.key().equals(selectedKey)) return;
 		selectedKey = entry.key();
 		paintSelection();
 		buildDetail();
@@ -318,16 +289,12 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private void paintSelection() {
 		for (GroupEntry entry : entries) {
 			JPanel line = groupRows.get(entry.key());
-			if (line == null)
-				continue;
+			if (line == null) continue;
 			boolean selected = entry.key().equals(selectedKey);
-			line.setBackground(selected ?
-					Theme.current().getAltBackgroundColor() :
-					Theme.current().getBackgroundColor());
-			line.setBorder(selected ?
-					BorderFactory.createCompoundBorder(
-							BorderFactory.createMatteBorder(0, 3, 0, 0, Theme.current().getInterfaceAccentColor()),
-							new EmptyBorder(4, 1, 4, 4)) :
+			line.setBackground(selected ? Theme.current().getAltBackgroundColor() : Theme.current().getBackgroundColor());
+			line.setBorder(selected ? BorderFactory.createCompoundBorder(
+					BorderFactory.createMatteBorder(0, 3, 0, 0, Theme.current().getInterfaceAccentColor()),
+					new EmptyBorder(4, 1, 4, 4)) :
 					new EmptyBorder(4, 4, 4, 4));
 		}
 	}
@@ -354,10 +321,9 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		filterBox.setSelectedIndex(filter.ordinal());
 		filterBox.setToolTipText(L10N.t("plugin_extension.filter_hint"));
 		ComponentUtils.deriveFont(filterBox, 11);
-		filterBox.addActionListener(e -> {
+		filterBox.addActionListener(_ -> {
 			Filter chosen = Filter.values()[filterBox.getSelectedIndex()];
-			if (chosen == filter)
-				return;
+			if (chosen == filter) return;
 			filter = chosen;
 			showRows(rows);
 		});
@@ -376,7 +342,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		header.add("West", lead);
 		if (entry.group() != null) {
 			JButton menu = iconButton("16px.edit", L10N.t("plugin_extension.group_options"));
-			menu.addActionListener(e -> groupMenu(entry.group()).show(menu, 0, menu.getHeight()));
+			menu.addActionListener(_ -> groupMenu(entry.group()).show(menu, 0, menu.getHeight()));
 			lead.add(new JEmptyBox(4, 4));
 			lead.add(menu);
 		}
@@ -400,10 +366,8 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		detailList.removeAll();
 		pluginBoxes.clear();
 		List<Row> visible = rows.stream().filter(this::matchesFilter).toList();
-		for (Row row : visible)
-			detailList.add(createRow(row));
-		if (visible.isEmpty())
-			detailList.add(createEmptyHint(rows.isEmpty() ? "plugin_extension.empty_group" : "plugin_extension.filter_empty"));
+		for (Row row : visible) detailList.add(createRow(row));
+		if (visible.isEmpty()) detailList.add(createEmptyHint(rows.isEmpty() ? "plugin_extension.empty_group" : "plugin_extension.filter_empty"));
 		detailList.add(Box.createVerticalGlue());
 		detailList.revalidate();
 		detailList.repaint();

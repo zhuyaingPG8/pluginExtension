@@ -14,40 +14,32 @@ final class RestartService {
 
 	private static MCreatorApplication application;
 	private static File archive;
-	// Written by the EDT (arm/disarm) and read back from the shutdown hook thread.
 	private static volatile boolean armed;
 
 	static void setApplication(MCreatorApplication mcreatorApplication) {
 		application = mcreatorApplication;
 	}
-
 	static void setArchive(File pluginArchive) {
 		archive = pluginArchive;
 	}
-
 	static boolean canRestart() {
 		return application != null && archive != null && archive.isFile() && relaunchCommand() != null;
 	}
-
 	static void closeApplication() {
 		application.closeApplication();
 	}
-
 	static void arm() {
-		if (armed)
-			return;
+		if (armed) return;
 		armed = true;
 		Runtime.getRuntime().addShutdownHook(new Thread(RestartService::spawnHelper, "plugin-groups-restart"));
 	}
-
 	static void disarm() {
 		armed = false;
 	}
 
 	private static void spawnHelper() {
 		String[] command = relaunchCommand();
-		if (!armed || command == null || archive == null)
-			return;
+		if (!armed || command == null || archive == null) return;
 		try {
 			List<String> helper = new ArrayList<>();
 			helper.add(javaExecutable());
@@ -66,10 +58,8 @@ final class RestartService {
 	private static String[] relaunchCommand() {
 		try {
 			String executable = ProcessHandle.current().info().command().orElse(null);
-			if (executable == null)
-				return null;
-			if (!isJavaBinary(executable))
-				return new String[] { executable };
+			if (executable == null) return null;
+			if (!isJavaBinary(executable)) return new String[] { executable };
 			List<String> command = new ArrayList<>();
 			command.add(executable);
 			command.addAll(ManagementFactory.getRuntimeMXBean().getInputArguments());

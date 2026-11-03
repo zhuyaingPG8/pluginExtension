@@ -17,9 +17,6 @@ import java.util.regex.Pattern;
 
 public final class WorkspaceFolderSupport {
 	private static final String TOOLTIP = "plugin_extension.new_folder.tooltip";
-	// Same expression the old String.matches(...) call used (including the ".*" wrapper, so the
-	// semantics stay byte-identical even for line separators); it is just compiled once instead of
-	// on every keystroke of the dialog's validator.
 	private static final Pattern ILLEGAL_FOLDER_CHARS = Pattern.compile(".*[/\\\\:*?\"<>|].*");
 
 	public static void install(MCreator mcreator) {

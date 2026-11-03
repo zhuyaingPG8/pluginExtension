@@ -15,10 +15,6 @@ import java.util.UUID;
 
 public class PluginGroupsConfig {
 	private static final String FILE_NAME = "plugin_extension.json";
-	/**
-	 * Group ids the panel owns and renders itself. A group restored from a hand-edited file under one of these ids
-	 * would collide with the fixed group keys and break the group/row mapping, so such groups are dropped on load.
-	 */
 	private static final Set<String> RESERVED_GROUP_IDS = Set.of("__ungrouped__", "__builtin__");
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 	private static PluginGroupsConfig instance;

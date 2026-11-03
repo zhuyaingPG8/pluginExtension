@@ -50,7 +50,6 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 				updateResolved();
 			}
 		});
-
 		resolved.setForeground(Theme.current().getAltForegroundColor());
 		ComponentUtils.deriveFont(resolved, 13);
 		ComponentUtils.deriveFont(classKind, 15);
@@ -116,7 +115,6 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 				canImplement = true;
 			}
 			default -> {
-				// "@interface" (and a null/unknown selection) accepts no supertype and no record components
 				record = false;
 				canExtend = false;
 				canImplement = false;
