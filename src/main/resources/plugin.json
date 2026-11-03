@@ -10,6 +10,7 @@
     "version": "2.4",
     "description": "Adds plugin groups with enable switches, and a custom element whose package path you can choose",
     "author": "zhuyaingPG8",
-    "pluginPageID": "124835"
+    "updateJSONURL": "https://github.com/zhuyaingPG8/pluginExtension/blob/main/update.json",
+    "pluginPageID": 124835
   }
 }
