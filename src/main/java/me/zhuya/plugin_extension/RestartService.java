@@ -1,6 +1,8 @@
 package me.zhuya.plugin_extension;
 
 import net.mcreator.ui.MCreatorApplication;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.File;
 import java.lang.management.ManagementFactory;
@@ -8,10 +10,12 @@ import java.util.ArrayList;
 import java.util.List;
 
 final class RestartService {
+	private static final Logger LOG = LogManager.getLogger("pluginExtension");
+
 	private static MCreatorApplication application;
 	private static File archive;
-	private static boolean armed;
-	private static String helperClass;
+	// Written by the EDT (arm/disarm) and read back from the shutdown hook thread.
+	private static volatile boolean armed;
 
 	static void setApplication(MCreatorApplication mcreatorApplication) {
 		application = mcreatorApplication;
@@ -33,7 +37,6 @@ final class RestartService {
 		if (armed)
 			return;
 		armed = true;
-		helperClass = RestartHelper.class.getName();
 		Runtime.getRuntime().addShutdownHook(new Thread(RestartService::spawnHelper, "plugin-groups-restart"));
 	}
 
@@ -50,12 +53,14 @@ final class RestartService {
 			helper.add(javaExecutable());
 			helper.add("-cp");
 			helper.add(archive.getAbsolutePath());
-			helper.add(helperClass);
+			helper.add(RestartHelper.class.getName());
 			helper.add(Long.toString(ProcessHandle.current().pid()));
 			helper.addAll(List.of(command));
 			new ProcessBuilder(helper).redirectOutput(ProcessBuilder.Redirect.DISCARD)
 					.redirectError(ProcessBuilder.Redirect.DISCARD).start();
-		} catch (Exception _) {}
+		} catch (Exception e) {
+			LOG.error("Could not spawn the restart helper; MCreator will not be relaunched automatically", e);
+		}
 	}
 
 	private static String[] relaunchCommand() {
@@ -73,6 +78,7 @@ final class RestartService {
 			command.add(mainClass());
 			return command.toArray(String[]::new);
 		} catch (Exception e) {
+			LOG.warn("Could not determine the MCreator relaunch command", e);
 			return null;
 		}
 	}

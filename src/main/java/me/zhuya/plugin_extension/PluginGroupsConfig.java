@@ -15,6 +15,11 @@ import java.util.UUID;
 
 public class PluginGroupsConfig {
 	private static final String FILE_NAME = "plugin_extension.json";
+	/**
+	 * Group ids the panel owns and renders itself. A group restored from a hand-edited file under one of these ids
+	 * would collide with the fixed group keys and break the group/row mapping, so such groups are dropped on load.
+	 */
+	private static final Set<String> RESERVED_GROUP_IDS = Set.of("__ungrouped__", "__builtin__");
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 	private static PluginGroupsConfig instance;
 	public int version = 1;
@@ -65,17 +70,22 @@ public class PluginGroupsConfig {
 		groups.removeIf(group -> {
 			if (group == null || group.id == null || group.id.isBlank() || !seenGroupIDs.add(group.id))
 				return true;
+			if (RESERVED_GROUP_IDS.contains(group.id))
+				return true;
 			if (group.name == null || group.name.isBlank())
 				group.name = group.id;
 			if (group.plugins == null)
 				group.plugins = new ArrayList<>();
 			group.plugins.removeIf(id -> id == null || id.isBlank());
+			// A plugin listed twice in the same group would render twice and be assigned twice; keep first occurrence.
+			group.plugins = new ArrayList<>(new LinkedHashSet<>(group.plugins));
 			return false;
 		});
 		disabled.removeIf(id -> id == null || id.isBlank());
+		disabled = new ArrayList<>(new LinkedHashSet<>(disabled));
 	}
 
-	public void save() {
+	public synchronized void save() {
 		try {
 			FileIO.writeStringToFile(GSON.toJson(this), getConfigFile());
 		} catch (Exception _) {}

@@ -15,6 +15,7 @@ import javax.swing.border.EmptyBorder;
 import javax.swing.event.ListDataEvent;
 import javax.swing.event.ListDataListener;
 import java.awt.*;
+import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.File;
@@ -22,6 +23,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -31,6 +33,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private static final String KEY_UNGROUPED = "__ungrouped__";
 	private static final String KEY_BUILTIN = "__builtin__";
 	private static final int GROUP_COLUMN_WIDTH = 150;
+	private static final String HOOKED_PROPERTY = "plugin_extension.hooked";
 	private final PreferencesDialog dialog;
 	private final PluginGroupsConfig config = PluginGroupsConfig.get();
 	private final Map<String, JCheckBox> pluginBoxes = new HashMap<>();
@@ -44,6 +47,14 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private final List<GroupEntry> entries = new ArrayList<>();
 	private List<Plugin> loadedPlugins = new ArrayList<>();
 	private List<PluginToggleService.DisabledPlugin> parkedPlugins = new ArrayList<>();
+	// Rows are built once per reload() (each Row.of(Plugin) performs a real ZipIO.checkIfZip file open),
+	// then repartitioned cheaply by rebuild() whenever group assignments change.
+	private List<Row> loadedRows = List.of();
+	private List<Row> parkedRows = List.of();
+	// Built in rebuild(), in the original visible order, so rowsFor() never rescans the plugin lists.
+	private final Map<String, List<Row>> rowsById = new LinkedHashMap<>();
+	private List<Row> builtinRows = List.of();
+	private List<Row> ungroupedRows = List.of();
 	private String selectedKey;
 	private boolean reloadQueued;
 	private final Set<String> initialDisabled = new LinkedHashSet<>();
@@ -55,15 +66,15 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 
-	private record Row(String id, String name, String version, String author, String description, boolean loaded, boolean parked, boolean manageable, File file) {
+	private record Row(String id, String name, String version, String author, String description, boolean loaded, boolean parked, boolean builtin, boolean manageable, File file) {
 		static Row of(Plugin plugin) {
 			return new Row(plugin.getID(), plugin.getInfo().getName(), plugin.getPluginVersion(),
 					plugin.getInfo().getAuthor(), plugin.getInfo().getDescription(), plugin.isLoaded(), false,
-					PluginToggleService.isManageable(plugin), plugin.getFile());
+					plugin.isBuiltin(), PluginToggleService.isManageable(plugin), plugin.getFile());
 		}
 		static Row of(PluginToggleService.DisabledPlugin plugin) {
 			return new Row(plugin.id(), plugin.name(), plugin.version(), plugin.author(), plugin.description(),
-					false, true, true, plugin.file());
+					false, true, false, true, plugin.file());
 		}
 	}
 
@@ -131,17 +142,31 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 	private void reload() {
+		// Single comparator: non-builtin plugins first, then by descending weight
+		// (sorting twice was only equivalent because the second sort was stable).
 		loadedPlugins = PluginLoader.INSTANCE.getPlugins().stream()
-				.sorted(Comparator.comparing(Plugin::getWeight).reversed())
-				.sorted(Comparator.comparing(Plugin::isBuiltin)).toList();
+				.sorted(Comparator.comparing(Plugin::isBuiltin)
+						.thenComparing(Comparator.comparing(Plugin::getWeight).reversed()))
+				.toList();
 		parkedPlugins = PluginToggleService.listDisabled();
 		PluginToggleService.ensureDisabledFolder();
+		// Not persisted on purpose: only Apply/Save writes the config to disk.
 		config.disabled.removeIf(PluginToggleService::isSelf);
 		pruneMissingPlugins();
 		if (!snapshotTaken) {
 			initialDisabled.addAll(config.disabled);
 			snapshotTaken = true;
 		}
+		// Each Row.of(Plugin) opens the plugin file (isManageable -> ZipIO.checkIfZip), so the rows are
+		// built here once per reload and only repartitioned by rebuild().
+		List<Row> loaded = new ArrayList<>();
+		for (Plugin plugin : loadedPlugins)
+			loaded.add(Row.of(plugin));
+		loadedRows = loaded;
+		List<Row> parked = new ArrayList<>();
+		for (PluginToggleService.DisabledPlugin plugin : parkedPlugins)
+			parked.add(Row.of(plugin));
+		parkedRows = parked;
 		rebuild();
 	}
 
@@ -162,11 +187,36 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		entries.add(new GroupEntry(KEY_BUILTIN, L10N.t("plugin_extension.builtin"), null, true));
 		if (entries.stream().noneMatch(entry -> entry.key().equals(selectedKey)))
 			selectedKey = entries.getFirst().key();
+		rebuildIndex();
 		buildGroupColumn();
 		buildDetail();
 		syncAll();
 		revalidate();
 		repaint();
+	}
+
+	/**
+	 * Repartitions the rows built by reload() into the lists rowsFor() reads. Group assignments change
+	 * without a reload, so this runs on every rebuild; it only touches memory (no file access).
+	 */
+	private void rebuildIndex() {
+		rowsById.clear();
+		for (Row row : loadedRows)
+			if (!row.builtin())
+				rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
+		for (Row row : parkedRows)
+			rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
+		builtinRows = loadedRows.stream().filter(Row::builtin).toList();
+		Set<String> assigned = new HashSet<>();
+		config.groups.forEach(group -> assigned.addAll(group.plugins));
+		List<Row> ungrouped = new ArrayList<>();
+		for (Row row : loadedRows)
+			if (!row.builtin() && !assigned.contains(row.id()))
+				ungrouped.add(row);
+		for (Row row : parkedRows)
+			if (!assigned.contains(row.id()))
+				ungrouped.add(row);
+		ungroupedRows = ungrouped;
 	}
 
 	private GroupEntry selectedEntry() {
@@ -177,31 +227,16 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 	private List<Row> rowsFor(GroupEntry entry) {
-		List<Row> rows = new ArrayList<>();
 		if (entry.group() != null) {
+			List<Row> rows = new ArrayList<>();
 			for (String id : entry.group().plugins) {
-				for (Plugin plugin : loadedPlugins)
-					if (!plugin.isBuiltin() && plugin.getID().equals(id))
-						rows.add(Row.of(plugin));
-				for (PluginToggleService.DisabledPlugin plugin : parkedPlugins)
-					if (plugin.id().equals(id))
-						rows.add(Row.of(plugin));
+				List<Row> matches = rowsById.get(id);
+				if (matches != null)
+					rows.addAll(matches);
 			}
-		} else if (KEY_BUILTIN.equals(entry.key())) {
-			for (Plugin plugin : loadedPlugins)
-				if (plugin.isBuiltin())
-					rows.add(Row.of(plugin));
-		} else {
-			Set<String> assigned = new HashSet<>();
-			config.groups.forEach(group -> assigned.addAll(group.plugins));
-			for (Plugin plugin : loadedPlugins)
-				if (!plugin.isBuiltin() && !assigned.contains(plugin.getID()))
-					rows.add(Row.of(plugin));
-			for (PluginToggleService.DisabledPlugin plugin : parkedPlugins)
-				if (!assigned.contains(plugin.id()))
-					rows.add(Row.of(plugin));
+			return rows;
 		}
-		return rows;
+		return KEY_BUILTIN.equals(entry.key()) ? builtinRows : ungroupedRows;
 	}
 
 	private JComponent createToolbar() {
@@ -443,17 +478,21 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private String formatLabel(Row row) {
 		StringBuilder builder = new StringBuilder("<html>");
 		builder.append(escape(row.name() == null ? row.id() : row.name()));
-		builder.append("<br><small>ID: ").append(escape(row.id()));
+		builder.append("<br><small>");
+		builder.append(L10N.t("plugin_extension.label_id")).append(": ").append(escape(row.id()));
 		if (row.version() != null && !row.version().isBlank())
-			builder.append(", version: ").append(escape(row.version()));
+			builder.append(", ").append(L10N.t("plugin_extension.label_version")).append(": ")
+					.append(escape(row.version()));
 		if (row.author() != null && !row.author().isBlank())
-			builder.append(", author: ").append(escape(row.author()));
+			builder.append(", ").append(L10N.t("plugin_extension.label_author")).append(": ")
+					.append(escape(row.author()));
 		if (row.parked()) {
 			builder.append(", <font color=#f24122>").append(L10N.t("plugin_extension.state_disabled")).append("</font>");
 		} else {
-			builder.append(", fully loaded: ").append(row.loaded() ?
-					"<font color=#a7ed1a>yes</font>" :
-					"<font color=#f24122>no</font>");
+			builder.append(", ").append(L10N.t("plugin_extension.label_loaded")).append(": ");
+			builder.append(row.loaded() ?
+					"<font color=#a7ed1a>" + L10N.t("plugin_extension.label_yes") + "</font>" :
+					"<font color=#f24122>" + L10N.t("plugin_extension.label_no") + "</font>");
 			if (needsManualPark(row))
 				builder.append(" <font color=#e8a33d>[").append(L10N.t("plugin_extension.pending_manual"))
 						.append("]</font>");
@@ -550,10 +589,9 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private void onChange() {
 		syncAll();
 		dialog.markChanged();
-		if (filter != Filter.ALL && selectedEntry() != null) {
-			GroupEntry entry = selectedEntry();
+		GroupEntry entry = filter == Filter.ALL ? null : selectedEntry();
+		if (entry != null)
 			SwingUtilities.invokeLater(() -> showRows(rowsFor(entry)));
-		}
 	}
 
 	private void createGroup() {
@@ -644,11 +682,16 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 	private boolean newlyDisabledAndBlocked() {
-		for (String id : config.disabledSet()) {
+		// Uses the reload()-built rows instead of rescanning the plugin list: PluginToggleService.isManageable()
+		// opens the plugin file, so it must not be called again here.
+		for (String id : config.disabled) {
 			if (initialDisabled.contains(id))
 				continue;
-			for (Plugin plugin : loadedPlugins)
-				if (plugin.getID().equals(id) && PluginToggleService.isManageable(plugin))
+			List<Row> rows = rowsById.get(id);
+			if (rows == null)
+				continue;
+			for (Row row : rows)
+				if (!row.parked() && row.manageable())
 					return true;
 		}
 		return false;
@@ -694,9 +737,19 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		Set<String> labels = new LinkedHashSet<>();
 		labels.add(L10N.button("action.common.apply").getText());
 		labels.add(L10N.button("dialog.preferences.save").getText());
-		for (JButton button : descendantsOfType(dialog, JButton.class))
-			if (labels.contains(button.getText()))
-				button.addActionListener(e -> panel.applyChanges());
+		ActionListener apply = e -> panel.applyChanges();
+		for (JButton button : descendantsOfType(dialog, JButton.class)) {
+			if (!labels.contains(button.getText()))
+				continue;
+			// install() runs again whenever the preferences dialog is shown; the dialog may reuse its
+			// buttons, so drop a listener installed by an earlier panel before adding the current one.
+			// Otherwise one click would run applyChanges() twice (double file moves, two restart prompts).
+			Object previous = button.getClientProperty(HOOKED_PROPERTY);
+			if (previous instanceof ActionListener stale)
+				button.removeActionListener(stale);
+			button.putClientProperty(HOOKED_PROPERTY, apply);
+			button.addActionListener(apply);
+		}
 	}
 
 	private static JList<?> findPluginList(Container root) {

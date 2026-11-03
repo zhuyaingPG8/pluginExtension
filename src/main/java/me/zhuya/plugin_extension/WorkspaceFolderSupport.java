@@ -13,9 +13,14 @@ import net.mcreator.workspace.elements.FolderElement;
 import javax.swing.*;
 import java.awt.*;
 import java.util.List;
+import java.util.regex.Pattern;
 
 public final class WorkspaceFolderSupport {
 	private static final String TOOLTIP = "plugin_extension.new_folder.tooltip";
+	// Same expression the old String.matches(...) call used (including the ".*" wrapper, so the
+	// semantics stay byte-identical even for line separators); it is just compiled once instead of
+	// on every keystroke of the dialog's validator.
+	private static final Pattern ILLEGAL_FOLDER_CHARS = Pattern.compile(".*[/\\\\:*?\"<>|].*");
 
 	public static void install(MCreator mcreator) {
 		if (!(mcreator instanceof ModMaker modMaker)) return;
@@ -66,13 +71,12 @@ public final class WorkspaceFolderSupport {
 
 		panel.currentFolder.addChild(new FolderElement(name.strip(), panel.currentFolder));
 		mcreator.getWorkspace().markDirty();
-		reload(mcreator);
+		reload(panel);
 
 		parent.requestFocusInWindow();
 	}
 
-	private static void reload(MCreator mcreator) {
-		WorkspacePanel panel = ((ModMaker) mcreator).getWorkspacePanel();
+	private static void reload(WorkspacePanel panel) {
 		WorkspacePanel.WorkspacePanelMods tab = panel.getVerticalTab(WorkspacePanel.WorkspacePanelMods.class);
 		if (tab != null) tab.reloadElements();
 	}
@@ -82,7 +86,7 @@ public final class WorkspaceFolderSupport {
 
 		if (candidate.isEmpty()) return "plugin_extension.new_folder.error_empty";
 		if (candidate.equals(".") || candidate.equals("..")) return "plugin_extension.new_folder.error_reserved";
-		if (candidate.matches(".*[/\\\\:*?\"<>|].*")) return "plugin_extension.new_folder.error_illegal";
+		if (ILLEGAL_FOLDER_CHARS.matcher(candidate).matches()) return "plugin_extension.new_folder.error_illegal";
 		if (candidate.endsWith(".")) return "plugin_extension.new_folder.error_trailing";
 
 		return null;

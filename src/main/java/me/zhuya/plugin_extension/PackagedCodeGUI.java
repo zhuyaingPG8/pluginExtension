@@ -16,6 +16,7 @@ import java.awt.event.*;
 import java.io.File;
 import java.net.URI;
 import java.net.URISyntaxException;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -89,11 +90,38 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 	}
 
 	private void updateKindFields() {
-		String kind = String.valueOf(classKind.getSelectedItem());
-		boolean plainClass = kind.equals("class") || kind.equals("final class") || kind.equals("abstract class");
-		boolean record = kind.equals("record");
-		boolean canExtend = plainClass || kind.equals("interface");
-		boolean canImplement = plainClass || record || kind.equals("enum");
+		String kind = Objects.toString(classKind.getSelectedItem(), "");
+		boolean record;
+		boolean canExtend;
+		boolean canImplement;
+		switch (kind) {
+			case "class", "final class", "abstract class" -> {
+				record = false;
+				canExtend = true;
+				canImplement = true;
+			}
+			case "interface" -> {
+				record = false;
+				canExtend = true;
+				canImplement = false;
+			}
+			case "record" -> {
+				record = true;
+				canExtend = false;
+				canImplement = true;
+			}
+			case "enum" -> {
+				record = false;
+				canExtend = false;
+				canImplement = true;
+			}
+			default -> {
+				// "@interface" (and a null/unknown selection) accepts no supertype and no record components
+				record = false;
+				canExtend = false;
+				canImplement = false;
+			}
+		}
 		superClass.setEnabled(canExtend);
 		superClassLabel.setEnabled(canExtend);
 		superClassLabel.setText(L10N.t(kind.equals("interface") ? "elementgui.packagedcode.super_interfaces" : "elementgui.packagedcode.super_class"));
@@ -124,7 +152,7 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 	}
 
 	private void updateResolved() {
-		String value = normalize(String.valueOf(targetPackage.getEditor().getItem()));
+		String value = normalize(Objects.toString(targetPackage.getEditor().getItem(), ""));
 		resolved.setText(value.isEmpty() ? mcreator.getWorkspaceSettings().getModElementsPackage() : mcreator.getWorkspaceSettings().getModElementsPackage() + "." + value);
 	}
 
@@ -161,7 +189,7 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 	}
 
 	@Override protected void openInEditingMode(PackagedCodeElement element) {
-		targetPackage.setSelectedItem(element.targetPackage);
+		targetPackage.setSelectedItem(Objects.toString(element.targetPackage, ""));
 		classKind.setSelectedItem(element.classKind == null ? CLASS_KINDS[0] : element.classKind);
 		superClass.setText(element.superClass == null ? "" : element.superClass);
 		interfaces.setText(element.interfaces == null ? "" : element.interfaces);
@@ -172,8 +200,8 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 
 	@Override public PackagedCodeElement getElementFromGUI() {
 		PackagedCodeElement element = new PackagedCodeElement(modElement);
-		element.targetPackage = normalize(String.valueOf(targetPackage.getEditor().getItem()));
-		element.classKind = String.valueOf(classKind.getSelectedItem());
+		element.targetPackage = normalize(Objects.toString(targetPackage.getEditor().getItem(), ""));
+		element.classKind = Objects.toString(classKind.getSelectedItem(), "");
 		element.superClass = normalizeTypeList(superClass.getText());
 		element.interfaces = normalizeTypeList(interfaces.getText());
 		element.recordComponents = recordComponents.getText().trim();
@@ -185,35 +213,11 @@ public class PackagedCodeGUI extends ModElementGUI<PackagedCodeElement> {
 	}
 
 	static String normalize(String value) {
-		if (value == null) return "";
-		String cleaned = value.trim().replace('\\', '/').replace('/', '.')
-				.replaceAll("[^A-Za-z0-9_.]", "").replaceAll("\\.{2,}", ".");
-		while (cleaned.startsWith(".")){
-			cleaned = cleaned.substring(1);
-		}
-		while (cleaned.endsWith(".")){
-			cleaned = cleaned.substring(0, cleaned.length() - 1);
-		}
-		return cleaned;
+		return PackageNames.normalize(value);
 	}
 
 	static String normalizeTypeList(String value) {
-		if (value == null || value.isBlank()) return "";
-		StringBuilder cleaned = new StringBuilder();
-		for (String part : value.split(",")) {
-			String name = part.trim().replace('\\', '/').replace('/', '.')
-					.replaceAll("[^A-Za-z0-9_$.]", "").replaceAll("\\.{2,}", ".");
-			while (name.startsWith(".")){
-				name = name.substring(1);
-			}
-			while (name.endsWith(".")){
-				name = name.substring(0, name.length() - 1);
-			}
-			if (name.isEmpty()) continue;
-			if (!cleaned.isEmpty()) cleaned.append(", ");
-			cleaned.append(name);
-		}
-		return cleaned.toString();
+		return PackageNames.normalizeTypeList(value);
 	}
 
 	@Override public URI contextURL() throws URISyntaxException {
