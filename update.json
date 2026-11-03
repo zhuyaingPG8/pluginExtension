@@ -1,1 +1,9 @@
-
+{
+  "plugin_extension": {
+    "latest": "2.5",
+    "changes": [
+      "Added the function for checking and updating plugins.",
+      "Fix the issue where the plugin group configuration fails silently when the file is in use."
+    ]
+  }
+}
