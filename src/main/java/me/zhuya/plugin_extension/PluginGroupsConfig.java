@@ -18,16 +18,14 @@ public class PluginGroupsConfig {
 	private static final Set<String> RESERVED_GROUP_IDS = Set.of("__ungrouped__", "__builtin__");
 	private static final Gson GSON = new GsonBuilder().setPrettyPrinting().disableHtmlEscaping().create();
 	private static PluginGroupsConfig instance;
-	public int version = 1;
 	public List<PluginGroup> groups = new ArrayList<>();
 	public List<String> disabled = new ArrayList<>();
 
 	public static class PluginGroup {
-		public String id = "";
-		public String name = "";
-		public boolean collapsed = false;
+		public String id;
+		public String name;
 		public List<String> plugins = new ArrayList<>();
-		public PluginGroup() {}
+
 		public PluginGroup(String id, String name) {
 			this.id = id;
 			this.name = name;

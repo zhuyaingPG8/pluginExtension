@@ -18,7 +18,6 @@ import java.awt.*;
 import java.awt.event.ActionListener;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
-import java.io.File;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -187,7 +186,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 				known.add(row);
 				continue;
 			}
-			rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
+			rowsById.computeIfAbsent(row.id(), _ -> new ArrayList<>()).add(row);
 		}
 		builtinRows = loadedRows.stream().filter(Row::builtin).toList();
 		Set<String> assigned = new HashSet<>();
@@ -225,12 +224,12 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		toolbar.setBorder(new EmptyBorder(0, 4, 0, 0));
 		JButton newGroup = L10N.button("plugin_extension.new_group");
 		newGroup.setIcon(UIRES.get("16px.add"));
-		newGroup.addActionListener(e -> createGroup());
+		newGroup.addActionListener(_ -> createGroup());
 		toolbar.add(newGroup);
 		toolbar.add(new JEmptyBox(5, 5));
 		JButton openDisabled = L10N.button("plugin_extension.open_disabled_folder");
 		openDisabled.setIcon(UIRES.get("16px.open"));
-		openDisabled.addActionListener(e -> {
+		openDisabled.addActionListener(_ -> {
 			PluginToggleService.ensureDisabledFolder();
 			DesktopUtils.openSafe(PluginToggleService.disabledFolder());
 		});
@@ -238,7 +237,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		toolbar.add(new JEmptyBox(5, 5));
 		JButton checkUpdates = L10N.button("plugin_extension.check_updates");
 		checkUpdates.setIcon(UIRES.get("16px.regencode"));
-		checkUpdates.addActionListener(e -> checkForUpdates(checkUpdates));
+		checkUpdates.addActionListener(_ -> checkForUpdates(checkUpdates));
 		toolbar.add(checkUpdates);
 		return toolbar;
 	}
@@ -312,7 +311,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		if (entry.locked()) {
 			box.setToolTipText(L10N.t("plugin_extension.builtin_hint"));
 		} else {
-			box.addActionListener(e -> toggleGroup(entry));
+			box.addActionListener(_ -> toggleGroup(entry));
 			box.setToolTipText(L10N.t("plugin_extension.group_toggle_hint"));
 		}
 		JLabel label = new JLabel();
@@ -466,7 +465,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 				L10N.t(PluginToggleService.isSelf(row.id()) ?
 						"plugin_extension.self_locked" :
 						"plugin_extension.locked"));
-		box.addActionListener(e -> {
+		box.addActionListener(_ -> {
 			config.setEnabled(row.id(), box.isSelected());
 			onChange();
 		});
@@ -479,7 +478,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		else if (row.description() != null)
 			label.setToolTipText(row.description());
 		JButton menu = iconButton("16px.swap", L10N.t("plugin_extension.move_to"));
-		menu.addActionListener(e -> assignMenu(row).show(menu, 0, menu.getHeight()));
+		menu.addActionListener(_ -> assignMenu(row).show(menu, 0, menu.getHeight()));
 		JPanel lead = new JPanel();
 		lead.setOpaque(false);
 		lead.setLayout(new BoxLayout(lead, BoxLayout.X_AXIS));
@@ -679,11 +678,11 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private JPopupMenu groupMenu(PluginGroupsConfig.PluginGroup group) {
 		JPopupMenu menu = new JPopupMenu();
 		JMenuItem rename = new JMenuItem(L10N.t("plugin_extension.rename"));
-		rename.addActionListener(e -> renameGroup(group));
+		rename.addActionListener(_ -> renameGroup(group));
 		menu.add(rename);
 		menu.addSeparator();
 		JMenuItem delete = new JMenuItem(L10N.t("plugin_extension.delete"));
-		delete.addActionListener(e -> deleteGroup(group));
+		delete.addActionListener(_ -> deleteGroup(group));
 		menu.add(delete);
 		return menu;
 	}
@@ -693,7 +692,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		UpdateService.UpdateInfo update = updates.get(row.id());
 		if (update != null) {
 			JMenuItem open = new JMenuItem(L10N.t("plugin_extension.open_update_page"));
-			open.addActionListener(e -> openUpdatePage(update));
+			open.addActionListener(_ -> openUpdatePage(update));
 			menu.add(open);
 			menu.addSeparator();
 		}
@@ -701,7 +700,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		JMenu moveTo = L10N.menu("plugin_extension.move_to");
 		for (PluginGroupsConfig.PluginGroup group : config.groups) {
 			JRadioButtonMenuItem item = new JRadioButtonMenuItem(group.name, group == current);
-			item.addActionListener(e -> {
+			item.addActionListener(_ -> {
 				config.assign(row.id(), group.id);
 				refresh();
 			});
@@ -710,7 +709,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		if (!config.groups.isEmpty())
 			moveTo.addSeparator();
 		JMenuItem newGroup = new JMenuItem(L10N.t("plugin_extension.new_group"));
-		newGroup.addActionListener(e -> {
+		newGroup.addActionListener(_ -> {
 			String name = askName(L10N.t("plugin_extension.new_group"), L10N.t("plugin_extension.new_group_title"), "");
 			if (name == null)
 				return;
@@ -721,7 +720,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		menu.add(moveTo);
 		if (current != null) {
 			JMenuItem remove = new JMenuItem(L10N.t("plugin_extension.remove_from_group"));
-			remove.addActionListener(e -> {
+			remove.addActionListener(_ -> {
 				config.unassign(row.id());
 				refresh();
 			});
