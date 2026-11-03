@@ -7,7 +7,7 @@ public final class RestartHelper {
 	private static final long WAIT_TIMEOUT_MINUTES = 5;
 	private static final long SETTLE_MILLIS = 1500;
 
-	public static void main(String[] args) throws Exception {
+	static void main(String[] args) throws Exception {
 		if (args.length < 2) {
 			log("no command to relaunch, aborting");
 			return;

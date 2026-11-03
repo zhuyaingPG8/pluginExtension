@@ -61,9 +61,7 @@ public final class PluginToggleService {
 
 	private static final Object ARCHIVE_CACHE_LOCK = new Object();
 	private static final int ARCHIVE_CACHE_LIMIT = 256;
-	/** Archives already confirmed to be zips, per archive version; only positive answers are kept. */
 	private static final Set<ArchiveKey> ZIP_CACHE = new HashSet<>();
-	/** Parsed plugin.json metadata, keyed by archive version so a replaced archive is re-read. */
 	private static final Map<ArchiveKey, DisabledPlugin> META_CACHE = new HashMap<>();
 
 	static boolean isParkable(String pluginID, boolean builtin, File file) {
@@ -75,17 +73,11 @@ public final class PluginToggleService {
 		return parent != null && parent.equals(pluginsFolder());
 	}
 
-	/**
-	 * Positive-only answer to "is this a plugin archive?". A negative is not cached on purpose: the most
-	 * common reason for a miss is that an antivirus briefly holds the archive open, and caching that would
-	 * hide a perfectly good plugin until the next restart.
-	 */
 	private static boolean isZipArchive(File file) {
 		ArchiveKey key = ArchiveKey.of(file);
 		synchronized (ARCHIVE_CACHE_LOCK) {
 			if (ZIP_CACHE.contains(key)) return true;
 		}
-		// Deliberately outside the lock: this does real file IO and must not block other readers.
 		boolean result = ZipIO.checkIfZip(file);
 		if (!result) return false;
 		synchronized (ARCHIVE_CACHE_LOCK) {
@@ -98,7 +90,6 @@ public final class PluginToggleService {
 		return true;
 	}
 
-	// Written by the plugin constructor, read on the EDT and from the shutdown hook thread.
 	private static volatile String selfPluginID;
 	public static void setSelfPluginID(String pluginID) {
 		selfPluginID = pluginID;
@@ -108,14 +99,6 @@ public final class PluginToggleService {
 		return pluginID != null && pluginID.equals(selfPluginID);
 	}
 
-	/**
-	 * Outcome of an {@link #apply} run.
-	 *
-	 * @param moved    at least one archive was moved, so a restart is needed for the change to take effect
-	 * @param deferred archives that are still loaded by MCreator and will be parked by {@link #parkOnExit()}
-	 * @param blocked  archives that could not be moved at all (a same-named file is already present, the
-	 *                 archive is locked, or the folder is not writable). These need a manual move.
-	 */
 	public record ApplyResult(boolean moved, int deferred, int blocked) {
 		public boolean needsRestart() {
 			return moved || deferred > 0 || blocked > 0;
@@ -139,9 +122,6 @@ public final class PluginToggleService {
 			if (parked == null || disabledIDs.contains(parked.id())) continue;
 			File target = new File(plugins, file.getName());
 			if (move(file, target)) moved = true;
-			// The archive stays in .disabled, so the plugin will NOT be loaded on the next start even
-			// though config says it is enabled. Count it so the caller can tell the user instead of
-			// letting the click silently do nothing.
 			else blocked++;
 		}
 		return new ApplyResult(moved, deferred, blocked);
@@ -267,8 +247,6 @@ public final class PluginToggleService {
 			File parent = to.getParentFile();
 			if (parent != null) parent.mkdirs();
 			if (isSameFile(from, to)) return true;
-			// Never replace an existing target: two plugins can share an archive file name, and
-			// REPLACE_EXISTING silently destroyed one of them.
 			if (to.exists()) {
 				LOG.warn("Not moving {} to {}: the target already exists", from, to);
 				return false;

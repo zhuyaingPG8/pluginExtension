@@ -56,7 +56,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private String selectedKey;
 	private boolean reloadQueued;
 	private Filter filter = Filter.ALL;
-	/** Available updates keyed by plugin id; replaced as a whole so readers never see a partial map. */
 	private volatile Map<String, UpdateService.UpdateInfo> updates = Map.of();
 	private boolean updateCheckRunning;
 
@@ -180,10 +179,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private void rebuildIndex() {
 		rowsById.clear();
 		for (Row row : loadedRows)
-			if (!row.builtin()) rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
-		// A plugin that was parked during this session is still in PluginLoader's plugin list, so the same
-		// id can show up here as both a loaded row and a parked row. Keep only the parked one: it is the
-		// archive the user can actually act on.
+			if (!row.builtin()) rowsById.computeIfAbsent(row.id(), _ -> new ArrayList<>()).add(row);
 		for (Row row : parkedRows) {
 			List<Row> known = rowsById.get(row.id());
 			if (known != null && !known.isEmpty()) {
@@ -247,10 +243,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		return toolbar;
 	}
 
-	/**
-	 * Runs the update check off the EDT: it performs one HTTP request per plugin that declares an update
-	 * source, which is far too slow to do while painting.
-	 */
 	private void checkForUpdates(JButton button) {
 		if (updateCheckRunning)
 			return;
@@ -267,9 +259,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 						return;
 					}
 					updates = result.updates();
-					// Rebuild so the rows pick up (or lose) the "new version" marker. rebuild() rather
-					// than refresh(): a check does not change any setting, so the dialog must not be
-					// marked as having unsaved changes.
 					rebuild();
 					showUpdateReport(result, null);
 				}));
@@ -435,7 +424,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		};
 	}
 
-	/** Number of rows that have a known newer version, used for the badge in the group column. */
 	private int updateCount(List<Row> rows) {
 		if (updates.isEmpty())
 			return 0;
@@ -617,8 +605,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 			}
 			JLabel label = groupLabels.get(entry.key());
 			if (label != null) {
-				// The update badge gets its own line: the group column is 150px wide, and "1/8 enabled 2 can
-				// update" does not fit next to the checkbox (measured ~123px against ~99px available).
 				StringBuilder text = new StringBuilder("<html>").append(escape(entry.name())).append("<br><small>")
 						.append(escape(L10N.t("plugin_extension.counter", enabled, rows.size()))).append("</small>");
 				int upgradable = updateCount(rows);
@@ -745,9 +731,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 	private void openUpdatePage(UpdateService.UpdateInfo update) {
-		// The update JSON only advertises the version, it carries no download URL, and mcreator.net
-		// answers non-browser clients with a challenge page. So the plugin page is the only reliable
-		// place to download from - open it instead of pretending to install anything.
 		if (update.pageID() > 0) {
 			DesktopUtils.browseSafe("https://mcreator.net/node/" + update.pageID());
 			return;
@@ -764,10 +747,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	void applyChanges() {
 		PluginToggleService.ApplyResult result = PluginToggleService.apply(PluginLoader.INSTANCE.getPlugins(),
 				config.disabledSet());
-		// Re-read the plugin folders so the rows (and their enable checkboxes) reflect what apply() just
-		// did. Without this the panel keeps showing pre-move state until the dialog is reopened.
 		reload();
-		// Saved after reload() so the pruned group entries and the self-exclusion land on disk too.
 		config.save();
 		if (result.deferred() > 0)
 			PluginToggleService.parkOnExit();
@@ -779,7 +759,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private void showRestartPrompt(PluginToggleService.ApplyResult result) {
 		String message;
 		if (!result.moved() && result.deferred() == 0) {
-			// Nothing was moved at all: do not claim that plugins were enabled, they were not.
 			message = L10N.t("plugin_extension.restart_message_stuck", result.blocked());
 		} else {
 			message = L10N.t(result.deferred() > 0 ?
@@ -814,9 +793,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		for (JButton button : descendantsOfType(dialog, JButton.class)) {
 			if (!labels.contains(button.getText()))
 				continue;
-			// install() runs again whenever the preferences dialog is shown; the dialog may reuse its
-			// buttons, so drop a listener installed by an earlier panel before adding the current one.
-			// Otherwise one click would run applyChanges() twice (double file moves, two restart prompts).
 			Object previous = button.getClientProperty(HOOKED_PROPERTY);
 			if (previous instanceof ActionListener stale)
 				button.removeActionListener(stale);

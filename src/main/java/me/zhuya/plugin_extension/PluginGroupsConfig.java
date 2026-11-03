@@ -73,7 +73,6 @@ public class PluginGroupsConfig {
 			if (group.plugins == null)
 				group.plugins = new ArrayList<>();
 			group.plugins.removeIf(id -> id == null || id.isBlank());
-			// A plugin listed twice in the same group would render twice and be assigned twice; keep first occurrence.
 			group.plugins = new ArrayList<>(new LinkedHashSet<>(group.plugins));
 			return false;
 		});
@@ -82,8 +81,6 @@ public class PluginGroupsConfig {
 	}
 
 	public void save() {
-		// Same monitor as get()/invalidate(): writing the file and swapping the cached instance must not
-		// interleave, otherwise a save can persist a config that another thread already replaced.
 		synchronized (PluginGroupsConfig.class) {
 			try {
 				FileIO.writeStringToFile(GSON.toJson(this), getConfigFile());

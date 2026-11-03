@@ -14,38 +14,20 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Checks the plugin update sources that plugins declare themselves in their plugin.json
- * ({@code info.updateJSONURL}), the same format MCreator's own update dialog reads.
- *
- * <p>Format: {@code { "<plugin id>": { "latest": "<version>", "changes": ["..."] } }}. Plugins that do
- * not declare an update source cannot be checked at all - that is reported separately instead of being
- * silently treated as "up to date".</p>
- */
 final class UpdateService {
 	private static final Logger LOG = LogManager.getLogger("pluginExtension");
 
-	/** A single available update as advertised by the plugin's own update JSON. */
 	record UpdateInfo(String id, String currentVersion, String availableVersion, List<String> changes,
 					  int pageID) {}
 
-	/** Outcome of one full check run. */
 	record Result(Map<String, UpdateInfo> updates, int checked, int failed, int unsupported) {}
 
 	private record Source(String id, String version, String updateURL, int pageID) {}
 
-	private UpdateService() {}
-
-	/**
-	 * Blocking: performs one HTTP request per plugin that declares an update source. Must not be called
-	 * on the EDT.
-	 */
 	static Result check(List<Plugin> loadedPlugins, List<PluginToggleService.DisabledPlugin> parkedPlugins) {
 		Map<String, Source> sources = new LinkedHashMap<>();
 		for (Plugin plugin : loadedPlugins) {
 			if (plugin.isBuiltin()) continue;
-			// This plugin cannot update itself: it cannot be disabled, and it is the code running the
-			// check. Reporting it as "no update source declared" would be pure noise.
 			if (PluginToggleService.isSelf(plugin.getID())) continue;
 			if (plugin.getInfo() == null) continue;
 			sources.putIfAbsent(plugin.getID(),
@@ -53,8 +35,6 @@ final class UpdateService {
 							plugin.getInfo().getPluginPageID()));
 		}
 		for (PluginToggleService.DisabledPlugin plugin : parkedPlugins) {
-			// An archive that is parked is not in PluginLoader's list, so it is only known from its
-			// plugin.json. "Absent from the map" wins nothing: the loader entry is the more current one.
 			sources.putIfAbsent(plugin.id(), new Source(plugin.id(), plugin.version(), plugin.updateJSONURL(),
 					plugin.pluginPageID()));
 		}
@@ -70,8 +50,6 @@ final class UpdateService {
 			try {
 				String raw = WebIO.readURLToString(source.updateURL());
 				if (raw.isBlank()) {
-					// WebIO swallows the reason and returns an empty string; count it as a failure so the
-					// user is not told everything is up to date when the source could not be reached.
 					failed++;
 					continue;
 				}
@@ -102,11 +80,6 @@ final class UpdateService {
 		return new UpdateInfo(source.id(), source.version(), latest, List.copyOf(changes), source.pageID());
 	}
 
-	/**
-	 * Tells whether {@code remote} is a strictly newer version than {@code current}. MCreator itself only
-	 * compares the strings for inequality, which reports a downgrade as an update; comparing the numeric
-	 * parts avoids that. Unparseable versions fall back to that inequality so nothing is missed.
-	 */
 	static boolean isNewer(String remote, String current) {
 		if (remote == null || remote.isBlank()) return false;
 		if (current == null || current.isBlank()) return true;
