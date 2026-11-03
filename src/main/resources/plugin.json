@@ -7,7 +7,7 @@
   "javaplugin": "me.zhuya.plugin_extension.pluginExtension",
   "info": {
     "name": "Plugin Extension",
-    "version": "2.4",
+    "version": "2.5",
     "description": "Adds plugin groups with enable switches, and a custom element whose package path you can choose",
     "author": "zhuyaingPG8",
     "updateJSONURL": "https://raw.githubusercontent.com/zhuyaingPG8/pluginExtension/main/update.json",
