@@ -7,6 +7,8 @@ import net.mcreator.io.zip.ZipIO;
 import net.mcreator.plugin.JavaPlugin;
 import net.mcreator.plugin.Plugin;
 import net.mcreator.plugin.PluginLoader;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.File;
 import java.io.IOException;
@@ -23,9 +25,12 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class PluginToggleService {
+	private static final Logger LOG = LogManager.getLogger("pluginExtension");
+
 	public static final String DISABLED_DIR = ".disabled";
 
-	public record DisabledPlugin(String id, String name, String version, String author, String description, File file) {}
+	public record DisabledPlugin(String id, String name, String version, String author, String description, File file,
+								 String updateJSONURL, int pluginPageID) {}
 
 	private static final class PluginsFolderHolder {
 		private static final File FOLDER = UserFolderManager.getFileFromUserFolder("plugins").getAbsoluteFile();
@@ -55,9 +60,11 @@ public final class PluginToggleService {
 	}
 
 	private static final Object ARCHIVE_CACHE_LOCK = new Object();
-	private static final Set<ArchiveKey> ZIP_CACHE = new HashSet<>();
 	private static final int ARCHIVE_CACHE_LIMIT = 256;
-	private static final Map<ArchiveKey, String> JSON_CACHE = new HashMap<>();
+	/** Archives already confirmed to be zips, per archive version; only positive answers are kept. */
+	private static final Set<ArchiveKey> ZIP_CACHE = new HashSet<>();
+	/** Parsed plugin.json metadata, keyed by archive version so a replaced archive is re-read. */
+	private static final Map<ArchiveKey, DisabledPlugin> META_CACHE = new HashMap<>();
 
 	static boolean isParkable(String pluginID, boolean builtin, File file) {
 		if (builtin || isSelf(pluginID))
@@ -68,24 +75,31 @@ public final class PluginToggleService {
 		return parent != null && parent.equals(pluginsFolder());
 	}
 
+	/**
+	 * Positive-only answer to "is this a plugin archive?". A negative is not cached on purpose: the most
+	 * common reason for a miss is that an antivirus briefly holds the archive open, and caching that would
+	 * hide a perfectly good plugin until the next restart.
+	 */
 	private static boolean isZipArchive(File file) {
 		ArchiveKey key = ArchiveKey.of(file);
 		synchronized (ARCHIVE_CACHE_LOCK) {
 			if (ZIP_CACHE.contains(key)) return true;
 		}
+		// Deliberately outside the lock: this does real file IO and must not block other readers.
 		boolean result = ZipIO.checkIfZip(file);
 		if (!result) return false;
 		synchronized (ARCHIVE_CACHE_LOCK) {
 			if (ZIP_CACHE.size() >= ARCHIVE_CACHE_LIMIT) {
 				ZIP_CACHE.clear();
-				JSON_CACHE.clear();
+				META_CACHE.clear();
 			}
 			ZIP_CACHE.add(key);
 		}
 		return true;
 	}
 
-	private static String selfPluginID;
+	// Written by the plugin constructor, read on the EDT and from the shutdown hook thread.
+	private static volatile String selfPluginID;
 	public static void setSelfPluginID(String pluginID) {
 		selfPluginID = pluginID;
 	}
@@ -94,9 +108,17 @@ public final class PluginToggleService {
 		return pluginID != null && pluginID.equals(selfPluginID);
 	}
 
-	public record ApplyResult(boolean moved, int deferred) {
+	/**
+	 * Outcome of an {@link #apply} run.
+	 *
+	 * @param moved    at least one archive was moved, so a restart is needed for the change to take effect
+	 * @param deferred archives that are still loaded by MCreator and will be parked by {@link #parkOnExit()}
+	 * @param blocked  archives that could not be moved at all (a same-named file is already present, the
+	 *                 archive is locked, or the folder is not writable). These need a manual move.
+	 */
+	public record ApplyResult(boolean moved, int deferred, int blocked) {
 		public boolean needsRestart() {
-			return moved || deferred > 0;
+			return moved || deferred > 0 || blocked > 0;
 		}
 	}
 
@@ -105,6 +127,7 @@ public final class PluginToggleService {
 		File disabled = disabledFolder();
 		boolean moved = false;
 		int deferred = 0;
+		int blocked = 0;
 		for (Plugin plugin : loadedPlugins) {
 			if (!isManageable(plugin) || !disabledIDs.contains(plugin.getID())) continue;
 			File file = plugin.getFile();
@@ -114,9 +137,14 @@ public final class PluginToggleService {
 		for (File file : listArchives(disabled)) {
 			DisabledPlugin parked = describe(file);
 			if (parked == null || disabledIDs.contains(parked.id())) continue;
-			moved |= move(file, new File(plugins, file.getName()));
+			File target = new File(plugins, file.getName());
+			if (move(file, target)) moved = true;
+			// The archive stays in .disabled, so the plugin will NOT be loaded on the next start even
+			// though config says it is enabled. Count it so the caller can tell the user instead of
+			// letting the click silently do nothing.
+			else blocked++;
 		}
-		return new ApplyResult(moved, deferred);
+		return new ApplyResult(moved, deferred, blocked);
 	}
 
 	private static final AtomicBoolean PARK_ON_EXIT_ARMED = new AtomicBoolean();
@@ -182,32 +210,27 @@ public final class PluginToggleService {
 		return result;
 	}
 
-	private static String readPluginJson(File archive) {
+	private static DisabledPlugin describe(File archive) {
 		ArchiveKey key = ArchiveKey.of(archive);
 		synchronized (ARCHIVE_CACHE_LOCK) {
-			String cached = JSON_CACHE.get(key);
+			DisabledPlugin cached = META_CACHE.get(key);
 			if (cached != null) return cached;
 		}
-		String raw;
-		try {
-			raw = ZipIO.readCodeInZip(archive, "plugin.json");
-		} catch (Exception e) {
-			raw = null;
-		}
-		if (raw == null) return null;
+		DisabledPlugin parsed = parseDescribe(archive);
+		if (parsed == null) return null;
 		synchronized (ARCHIVE_CACHE_LOCK) {
-			if (JSON_CACHE.size() >= ARCHIVE_CACHE_LIMIT) {
+			if (META_CACHE.size() >= ARCHIVE_CACHE_LIMIT) {
 				ZIP_CACHE.clear();
-				JSON_CACHE.clear();
+				META_CACHE.clear();
 			}
-			JSON_CACHE.put(key, raw);
+			META_CACHE.put(key, parsed);
 		}
-		return raw;
+		return parsed;
 	}
 
-	private static DisabledPlugin describe(File archive) {
+	private static DisabledPlugin parseDescribe(File archive) {
 		try {
-			String raw = readPluginJson(archive);
+			String raw = ZipIO.readCodeInZip(archive, "plugin.json");
 			if (raw == null) return null;
 			JsonObject root = JsonParser.parseString(raw).getAsJsonObject();
 			String id = text(root, "id", "");
@@ -215,7 +238,13 @@ public final class PluginToggleService {
 					root.getAsJsonObject("info") :
 					new JsonObject();
 			return new DisabledPlugin(id, text(info, "name", id), text(info, "version", ""),
-					text(info, "author", ""), text(info, "description", ""), archive);
+					text(info, "author", ""), text(info, "description", ""), archive,
+					info.has("updateJSONURL") && !info.get("updateJSONURL").isJsonNull() ?
+							info.get("updateJSONURL").getAsString() :
+							null,
+					info.has("pluginPageID") && !info.get("pluginPageID").isJsonNull() ?
+							info.get("pluginPageID").getAsInt() :
+							0);
 		} catch (Exception e) {
 			return null;
 		}
@@ -238,10 +267,16 @@ public final class PluginToggleService {
 			File parent = to.getParentFile();
 			if (parent != null) parent.mkdirs();
 			if (isSameFile(from, to)) return true;
-			if (to.exists()) return false;
+			// Never replace an existing target: two plugins can share an archive file name, and
+			// REPLACE_EXISTING silently destroyed one of them.
+			if (to.exists()) {
+				LOG.warn("Not moving {} to {}: the target already exists", from, to);
+				return false;
+			}
 			Files.move(from.toPath(), to.toPath());
 			return true;
 		} catch (IOException e) {
+			LOG.warn("Failed to move {} to {}: {}", from, to, e.toString());
 			return false;
 		}
 	}

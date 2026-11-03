@@ -81,10 +81,14 @@ public class PluginGroupsConfig {
 		disabled = new ArrayList<>(new LinkedHashSet<>(disabled));
 	}
 
-	public synchronized void save() {
-		try {
-			FileIO.writeStringToFile(GSON.toJson(this), getConfigFile());
-		} catch (Exception _) {}
+	public void save() {
+		// Same monitor as get()/invalidate(): writing the file and swapping the cached instance must not
+		// interleave, otherwise a save can persist a config that another thread already replaced.
+		synchronized (PluginGroupsConfig.class) {
+			try {
+				FileIO.writeStringToFile(GSON.toJson(this), getConfigFile());
+			} catch (Exception _) {}
+		}
 	}
 
 	public static File getConfigFile() {

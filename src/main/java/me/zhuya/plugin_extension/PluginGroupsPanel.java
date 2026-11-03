@@ -28,6 +28,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 
 public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private static final String KEY_UNGROUPED = "__ungrouped__";
@@ -54,23 +55,24 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private List<Row> ungroupedRows = List.of();
 	private String selectedKey;
 	private boolean reloadQueued;
-	private final Set<String> initialDisabled = new LinkedHashSet<>();
-	private boolean snapshotTaken;
 	private Filter filter = Filter.ALL;
+	/** Available updates keyed by plugin id; replaced as a whole so readers never see a partial map. */
+	private volatile Map<String, UpdateService.UpdateInfo> updates = Map.of();
+	private boolean updateCheckRunning;
 
 	private enum Filter {
 		ALL, ENABLED, DISABLED
 	}
 
-	private record Row(String id, String name, String version, String author, String description, boolean loaded, boolean parked, boolean builtin, boolean manageable, File file) {
+	private record Row(String id, String name, String version, String author, String description, boolean loaded, boolean parked, boolean builtin, boolean manageable) {
 		static Row of(Plugin plugin) {
 			return new Row(plugin.getID(), plugin.getInfo().getName(), plugin.getPluginVersion(),
 					plugin.getInfo().getAuthor(), plugin.getInfo().getDescription(), plugin.isLoaded(), false,
-					plugin.isBuiltin(), PluginToggleService.isManageable(plugin), plugin.getFile());
+					plugin.isBuiltin(), PluginToggleService.isManageable(plugin));
 		}
 		static Row of(PluginToggleService.DisabledPlugin plugin) {
 			return new Row(plugin.id(), plugin.name(), plugin.version(), plugin.author(), plugin.description(),
-					false, true, false, true, plugin.file());
+					false, true, false, true);
 		}
 	}
 
@@ -144,10 +146,6 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		PluginToggleService.ensureDisabledFolder();
 		config.disabled.removeIf(PluginToggleService::isSelf);
 		pruneMissingPlugins();
-		if (!snapshotTaken) {
-			initialDisabled.addAll(config.disabled);
-			snapshotTaken = true;
-		}
 		List<Row> loaded = new ArrayList<>();
 		for (Plugin plugin : loadedPlugins) loaded.add(Row.of(plugin));
 		loadedRows = loaded;
@@ -183,15 +181,27 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		rowsById.clear();
 		for (Row row : loadedRows)
 			if (!row.builtin()) rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
-		for (Row row : parkedRows) rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
+		// A plugin that was parked during this session is still in PluginLoader's plugin list, so the same
+		// id can show up here as both a loaded row and a parked row. Keep only the parked one: it is the
+		// archive the user can actually act on.
+		for (Row row : parkedRows) {
+			List<Row> known = rowsById.get(row.id());
+			if (known != null && !known.isEmpty()) {
+				known.clear();
+				known.add(row);
+				continue;
+			}
+			rowsById.computeIfAbsent(row.id(), key -> new ArrayList<>()).add(row);
+		}
 		builtinRows = loadedRows.stream().filter(Row::builtin).toList();
 		Set<String> assigned = new HashSet<>();
 		config.groups.forEach(group -> assigned.addAll(group.plugins));
+		Set<String> seen = new HashSet<>();
 		List<Row> ungrouped = new ArrayList<>();
 		for (Row row : loadedRows)
-			if (!row.builtin() && !assigned.contains(row.id())) ungrouped.add(row);
+			if (!row.builtin() && !assigned.contains(row.id()) && seen.add(row.id())) ungrouped.add(row);
 		for (Row row : parkedRows)
-			if (!assigned.contains(row.id())) ungrouped.add(row);
+			if (!assigned.contains(row.id()) && seen.add(row.id())) ungrouped.add(row);
 		ungroupedRows = ungrouped;
 	}
 
@@ -229,7 +239,70 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 			DesktopUtils.openSafe(PluginToggleService.disabledFolder());
 		});
 		toolbar.add(openDisabled);
+		toolbar.add(new JEmptyBox(5, 5));
+		JButton checkUpdates = L10N.button("plugin_extension.check_updates");
+		checkUpdates.setIcon(UIRES.get("16px.regencode"));
+		checkUpdates.addActionListener(e -> checkForUpdates(checkUpdates));
+		toolbar.add(checkUpdates);
 		return toolbar;
+	}
+
+	/**
+	 * Runs the update check off the EDT: it performs one HTTP request per plugin that declares an update
+	 * source, which is far too slow to do while painting.
+	 */
+	private void checkForUpdates(JButton button) {
+		if (updateCheckRunning)
+			return;
+		updateCheckRunning = true;
+		button.setEnabled(false);
+		List<Plugin> loaded = List.copyOf(loadedPlugins);
+		List<PluginToggleService.DisabledPlugin> parked = List.copyOf(parkedPlugins);
+		CompletableFuture.supplyAsync(() -> UpdateService.check(loaded, parked)).whenComplete((result, error) ->
+				SwingUtilities.invokeLater(() -> {
+					updateCheckRunning = false;
+					button.setEnabled(true);
+					if (error != null) {
+						showUpdateReport(null, error);
+						return;
+					}
+					updates = result.updates();
+					// Rebuild so the rows pick up (or lose) the "new version" marker. rebuild() rather
+					// than refresh(): a check does not change any setting, so the dialog must not be
+					// marked as having unsaved changes.
+					rebuild();
+					showUpdateReport(result, null);
+				}));
+	}
+
+	private void showUpdateReport(UpdateService.Result result, Throwable error) {
+		StringBuilder message = new StringBuilder("<html>");
+		if (error != null) {
+			message.append(escape(error.toString()));
+		} else if (result.updates().isEmpty()) {
+			message.append(escape(L10N.t("plugin_extension.check_updates_none", result.checked())));
+		} else {
+			message.append(escape(L10N.t("plugin_extension.check_updates_found", result.updates().size())));
+			for (UpdateService.UpdateInfo info : result.updates().values()) {
+				message.append("<br><br><b>").append(escape(info.id())).append("</b>: ");
+				message.append(escape(info.currentVersion() == null ? "?" : info.currentVersion()));
+				message.append(" &rarr; <b>").append(escape(info.availableVersion())).append("</b>");
+				for (String change : info.changes())
+					message.append("<br>&nbsp;&nbsp;&bull; ").append(escape(change));
+			}
+		}
+		if (result != null && (result.failed() > 0 || result.unsupported() > 0)) {
+			message.append("<br><br><small>");
+			if (result.unsupported() > 0)
+				message.append(escape(L10N.t("plugin_extension.check_updates_unsupported", result.unsupported())));
+			if (result.unsupported() > 0 && result.failed() > 0)
+				message.append("<br>");
+			if (result.failed() > 0)
+				message.append(escape(L10N.t("plugin_extension.check_updates_failed", result.failed())));
+			message.append("</small>");
+		}
+		JOptionPane.showMessageDialog(dialog, message.toString(), L10N.t("plugin_extension.check_updates_title"),
+				JOptionPane.INFORMATION_MESSAGE);
 	}
 
 	private void buildGroupColumn() {
@@ -461,6 +534,10 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 				builder.append(" <font color=#e8a33d>[").append(L10N.t("plugin_extension.pending_manual"))
 						.append("]</font>");
 		}
+		UpdateService.UpdateInfo update = updates.get(row.id());
+		if (update != null)
+			builder.append(" <font color=#4ea1f7>[").append(L10N.t("plugin_extension.update_available"))
+					.append(": ").append(escape(update.availableVersion())).append("]</font>");
 		builder.append("</small>");
 		return builder.toString();
 	}
@@ -607,6 +684,13 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 
 	private JPopupMenu assignMenu(Row row) {
 		JPopupMenu menu = new JPopupMenu();
+		UpdateService.UpdateInfo update = updates.get(row.id());
+		if (update != null) {
+			JMenuItem open = new JMenuItem(L10N.t("plugin_extension.open_update_page"));
+			open.addActionListener(e -> openUpdatePage(update));
+			menu.add(open);
+			menu.addSeparator();
+		}
 		PluginGroupsConfig.PluginGroup current = config.groupOf(row.id());
 		JMenu moveTo = L10N.menu("plugin_extension.move_to");
 		for (PluginGroupsConfig.PluginGroup group : config.groups) {
@@ -640,45 +724,50 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		return menu;
 	}
 
+	private void openUpdatePage(UpdateService.UpdateInfo update) {
+		// The update JSON only advertises the version, it carries no download URL, and mcreator.net
+		// answers non-browser clients with a challenge page. So the plugin page is the only reliable
+		// place to download from - open it instead of pretending to install anything.
+		if (update.pageID() > 0) {
+			DesktopUtils.browseSafe("https://mcreator.net/node/" + update.pageID());
+			return;
+		}
+		JOptionPane.showMessageDialog(dialog, L10N.t("plugin_extension.update_no_page", update.id()),
+				L10N.t("plugin_extension.check_updates_title"), JOptionPane.INFORMATION_MESSAGE);
+	}
+
 	private void refresh() {
 		rebuild();
 		dialog.markChanged();
 	}
 
-	private boolean newlyDisabledAndBlocked() {
-		// Uses the reload()-built rows instead of rescanning the plugin list: PluginToggleService.isManageable()
-		// opens the plugin file, so it must not be called again here.
-		for (String id : config.disabled) {
-			if (initialDisabled.contains(id))
-				continue;
-			List<Row> rows = rowsById.get(id);
-			if (rows == null)
-				continue;
-			for (Row row : rows)
-				if (!row.parked() && row.manageable())
-					return true;
-		}
-		return false;
-	}
-
 	void applyChanges() {
 		PluginToggleService.ApplyResult result = PluginToggleService.apply(PluginLoader.INSTANCE.getPlugins(),
 				config.disabledSet());
+		// Re-read the plugin folders so the rows (and their enable checkboxes) reflect what apply() just
+		// did. Without this the panel keeps showing pre-move state until the dialog is reopened.
+		reload();
+		// Saved after reload() so the pruned group entries and the self-exclusion land on disk too.
 		config.save();
-		boolean deferred = newlyDisabledAndBlocked();
-		initialDisabled.clear();
-		initialDisabled.addAll(config.disabled);
-		if (!result.moved() && !deferred)
-			return;
 		if (result.deferred() > 0)
 			PluginToggleService.parkOnExit();
-		showRestartPrompt(deferred);
+		if (!result.needsRestart())
+			return;
+		showRestartPrompt(result);
 	}
 
-	private void showRestartPrompt(boolean deferred) {
-		String message = L10N.t(deferred ?
-				"plugin_extension.restart_message_deferred" :
-				"plugin_extension.restart_message");
+	private void showRestartPrompt(PluginToggleService.ApplyResult result) {
+		String message;
+		if (!result.moved() && result.deferred() == 0) {
+			// Nothing was moved at all: do not claim that plugins were enabled, they were not.
+			message = L10N.t("plugin_extension.restart_message_stuck", result.blocked());
+		} else {
+			message = L10N.t(result.deferred() > 0 ?
+					"plugin_extension.restart_message_deferred" :
+					"plugin_extension.restart_message");
+			if (result.blocked() > 0)
+				message = message + "<br><br>" + L10N.t("plugin_extension.restart_message_blocked", result.blocked());
+		}
 		if (!RestartService.canRestart()) {
 			JOptionPane.showMessageDialog(dialog, message, L10N.t("plugin_extension.restart_title"),
 					JOptionPane.INFORMATION_MESSAGE);

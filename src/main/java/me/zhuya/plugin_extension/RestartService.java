@@ -12,8 +12,9 @@ import java.util.List;
 final class RestartService {
 	private static final Logger LOG = LogManager.getLogger("pluginExtension");
 
-	private static MCreatorApplication application;
-	private static File archive;
+	// Set once from the plugin constructor, read on the EDT and from the shutdown hook thread.
+	private static volatile MCreatorApplication application;
+	private static volatile File archive;
 	private static volatile boolean armed;
 
 	static void setApplication(MCreatorApplication mcreatorApplication) {
