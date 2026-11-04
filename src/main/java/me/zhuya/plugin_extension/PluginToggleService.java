@@ -224,6 +224,16 @@ public final class PluginToggleService {
 		return result;
 	}
 
+	public static Set<String> knownPluginIDs(Collection<Plugin> loadedPlugins,
+			Collection<DisabledPlugin> parkedPlugins, Collection<DisabledPlugin> pendingPlugins) {
+		Set<String> known = new HashSet<>();
+		for (Plugin plugin : loadedPlugins)
+			if (plugin != null && !plugin.isBuiltin()) known.add(plugin.getID());
+		for (DisabledPlugin plugin : parkedPlugins) known.add(plugin.id());
+		for (DisabledPlugin plugin : pendingPlugins) known.add(plugin.id());
+		return known;
+	}
+
 	private static DisabledPlugin describe(File archive) {
 		ArchiveKey key = ArchiveKey.of(archive);
 		synchronized (ARCHIVE_CACHE_LOCK) {

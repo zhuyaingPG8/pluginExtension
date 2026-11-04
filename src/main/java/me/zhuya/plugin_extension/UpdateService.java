@@ -28,10 +28,11 @@ final class UpdateService {
 		Map<String, Source> sources = new LinkedHashMap<>();
 		for (Plugin plugin : loadedPlugins) {
 			if (plugin.isBuiltin()) continue;
-			if (PluginToggleService.isSelf(plugin.getID())) continue;
 			if (plugin.getInfo() == null) continue;
+			String updateURL = plugin.getInfo().getUpdateJSONURL();
+			if (PluginToggleService.isSelf(plugin.getID()) && (updateURL == null || updateURL.isBlank())) continue;
 			sources.putIfAbsent(plugin.getID(),
-					new Source(plugin.getID(), plugin.getPluginVersion(), plugin.getInfo().getUpdateJSONURL(),
+					new Source(plugin.getID(), plugin.getPluginVersion(), updateURL,
 							plugin.getInfo().getPluginPageID()));
 		}
 		for (PluginToggleService.DisabledPlugin plugin : parkedPlugins) {
