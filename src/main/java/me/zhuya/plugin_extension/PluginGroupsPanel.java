@@ -47,8 +47,10 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	private final List<GroupEntry> entries = new ArrayList<>();
 	private List<Plugin> loadedPlugins = new ArrayList<>();
 	private List<PluginToggleService.DisabledPlugin> parkedPlugins = new ArrayList<>();
+	private List<PluginToggleService.DisabledPlugin> pendingPlugins = new ArrayList<>();
 	private List<Row> loadedRows = List.of();
 	private List<Row> parkedRows = List.of();
+	private List<Row> pendingRows = List.of();
 	private final Map<String, List<Row>> rowsById = new LinkedHashMap<>();
 	private List<Row> builtinRows = List.of();
 	private List<Row> ungroupedRows = List.of();
@@ -62,15 +64,19 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		ALL, ENABLED, DISABLED
 	}
 
-	private record Row(String id, String name, String version, String author, String description, boolean loaded, boolean parked, boolean builtin, boolean manageable) {
+	private record Row(String id, String name, String version, String author, String description, boolean loaded, boolean parked, boolean pending, boolean builtin, boolean manageable) {
 		static Row of(Plugin plugin) {
 			return new Row(plugin.getID(), plugin.getInfo().getName(), plugin.getPluginVersion(),
-					plugin.getInfo().getAuthor(), plugin.getInfo().getDescription(), plugin.isLoaded(), false,
+					plugin.getInfo().getAuthor(), plugin.getInfo().getDescription(), plugin.isLoaded(), false, false,
 					plugin.isBuiltin(), PluginToggleService.isManageable(plugin));
 		}
 		static Row of(PluginToggleService.DisabledPlugin plugin) {
 			return new Row(plugin.id(), plugin.name(), plugin.version(), plugin.author(), plugin.description(),
-					false, true, false, true);
+					false, true, false, false, true);
+		}
+		static Row ofPending(PluginToggleService.DisabledPlugin plugin) {
+			return new Row(plugin.id(), plugin.name(), plugin.version(), plugin.author(), plugin.description(),
+					false, false, true, false, true);
 		}
 	}
 
@@ -141,6 +147,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		loadedPlugins = PluginLoader.INSTANCE.getPlugins().stream().sorted(Comparator.comparing(Plugin::isBuiltin)
 						.thenComparing(Comparator.comparing(Plugin::getWeight).reversed())).toList();
 		parkedPlugins = PluginToggleService.listDisabled();
+		pendingPlugins = PluginToggleService.listPending(loadedPlugins);
 		PluginToggleService.ensureDisabledFolder();
 		config.disabled.removeIf(PluginToggleService::isSelf);
 		pruneMissingPlugins();
@@ -150,14 +157,14 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		List<Row> parked = new ArrayList<>();
 		for (PluginToggleService.DisabledPlugin plugin : parkedPlugins) parked.add(Row.of(plugin));
 		parkedRows = parked;
+		List<Row> pending = new ArrayList<>();
+		for (PluginToggleService.DisabledPlugin plugin : pendingPlugins) pending.add(Row.ofPending(plugin));
+		pendingRows = pending;
 		rebuild();
 	}
 
 	private void pruneMissingPlugins() {
-		Set<String> groupable = new HashSet<>();
-		for (Plugin plugin : loadedPlugins)
-			if (!plugin.isBuiltin()) groupable.add(plugin.getID());
-		parkedPlugins.forEach(plugin -> groupable.add(plugin.id()));
+		Set<String> groupable = PluginToggleService.knownPluginIDs(loadedPlugins, parkedPlugins, pendingPlugins);
 		config.groups.forEach(group -> group.plugins.removeIf(id -> !groupable.contains(id)));
 	}
 
@@ -179,6 +186,15 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		rowsById.clear();
 		for (Row row : loadedRows)
 			if (!row.builtin()) rowsById.computeIfAbsent(row.id(), _ -> new ArrayList<>()).add(row);
+		for (Row row : pendingRows) {
+			List<Row> known = rowsById.get(row.id());
+			if (known != null && !known.isEmpty()) {
+				known.clear();
+				known.add(row);
+				continue;
+			}
+			rowsById.computeIfAbsent(row.id(), _ -> new ArrayList<>()).add(row);
+		}
 		for (Row row : parkedRows) {
 			List<Row> known = rowsById.get(row.id());
 			if (known != null && !known.isEmpty()) {
@@ -195,6 +211,8 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		List<Row> ungrouped = new ArrayList<>();
 		for (Row row : loadedRows)
 			if (!row.builtin() && !assigned.contains(row.id()) && seen.add(row.id())) ungrouped.add(row);
+		for (Row row : pendingRows)
+			if (!assigned.contains(row.id()) && seen.add(row.id())) ungrouped.add(row);
 		for (Row row : parkedRows)
 			if (!assigned.contains(row.id()) && seen.add(row.id())) ungrouped.add(row);
 		ungroupedRows = ungrouped;
@@ -248,7 +266,8 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 		updateCheckRunning = true;
 		button.setEnabled(false);
 		List<Plugin> loaded = List.copyOf(loadedPlugins);
-		List<PluginToggleService.DisabledPlugin> parked = List.copyOf(parkedPlugins);
+		List<PluginToggleService.DisabledPlugin> parked = new ArrayList<>(pendingPlugins);
+		parked.addAll(parkedPlugins);
 		CompletableFuture.supplyAsync(() -> UpdateService.check(loaded, parked)).whenComplete((result, error) ->
 				SwingUtilities.invokeLater(() -> {
 					updateCheckRunning = false;
@@ -475,6 +494,8 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 				Theme.current().getAltForegroundColor());
 		if (needsManualPark(row))
 			label.setToolTipText(L10N.t("plugin_extension.pending_manual_hint"));
+		else if (row.pending())
+			label.setToolTipText(L10N.t("plugin_extension.pending_restart_hint"));
 		else if (row.description() != null)
 			label.setToolTipText(row.description());
 		JButton menu = iconButton("16px.swap", L10N.t("plugin_extension.move_to"));
@@ -507,7 +528,7 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 	}
 
 	private boolean needsManualPark(Row row) {
-		return row.manageable() && !row.parked() && !config.isEnabled(row.id());
+		return row.manageable() && !row.parked() && !row.pending() && !config.isEnabled(row.id());
 	}
 
 	private String formatLabel(Row row) {
@@ -523,6 +544,8 @@ public class PluginGroupsPanel extends JPanel implements Scrollable {
 					.append(escape(row.author()));
 		if (row.parked()) {
 			builder.append(", <font color=#f24122>").append(L10N.t("plugin_extension.state_disabled")).append("</font>");
+		} else if (row.pending()) {
+			builder.append(", <font color=#e8a33d>").append(L10N.t("plugin_extension.state_pending")).append("</font>");
 		} else {
 			builder.append(", ").append(L10N.t("plugin_extension.label_loaded")).append(": ");
 			builder.append(row.loaded() ?

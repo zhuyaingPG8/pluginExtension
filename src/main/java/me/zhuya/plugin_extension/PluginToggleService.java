@@ -111,12 +111,25 @@ public final class PluginToggleService {
 		boolean moved = false;
 		int deferred = 0;
 		int blocked = 0;
+		Set<File> loadedFiles = new HashSet<>();
 		for (Plugin plugin : loadedPlugins) {
+			if (plugin == null) continue;
+			if (plugin.getFile() != null) loadedFiles.add(plugin.getFile().getAbsoluteFile());
 			if (!isManageable(plugin) || !disabledIDs.contains(plugin.getID())) continue;
 			File file = plugin.getFile();
 			if (move(file, new File(disabled, file.getName()))) moved = true;
 			else deferred++;
 		}
+
+		int reverted = 0;
+		for (File file : listArchives(plugins)) {
+			if (loadedFiles.contains(file.getAbsoluteFile())) continue;
+			DisabledPlugin pending = describe(file);
+			if (pending == null || isSelf(pending.id()) || !disabledIDs.contains(pending.id())) continue;
+			if (move(file, new File(disabled, file.getName()))) reverted++;
+			else deferred++;
+		}
+		if (reverted > 0) LOG.info("Moved {} not yet loaded archive(s) back into the disabled folder", reverted);
 		for (File file : listArchives(disabled)) {
 			DisabledPlugin parked = describe(file);
 			if (parked == null || disabledIDs.contains(parked.id())) continue;
@@ -141,8 +154,11 @@ public final class PluginToggleService {
 	}
 
 	private static boolean needsParking(Set<String> disabledIDs) {
-		for (Plugin plugin : PluginLoader.INSTANCE.getPlugins())
+		Collection<Plugin> loadedPlugins = PluginLoader.INSTANCE.getPlugins();
+		for (Plugin plugin : loadedPlugins)
 			if (disabledIDs.contains(plugin.getID()) && isManageable(plugin)) return true;
+		for (DisabledPlugin pending : listPending(loadedPlugins))
+			if (disabledIDs.contains(pending.id())) return true;
 		return false;
 	}
 
@@ -188,6 +204,34 @@ public final class PluginToggleService {
 			if (plugin != null) result.add(plugin);
 		}
 		return result;
+	}
+
+	public static List<DisabledPlugin> listPending(Collection<Plugin> loadedPlugins) {
+		Set<File> loadedFiles = new HashSet<>();
+		Set<String> loadedIDs = new HashSet<>();
+		for (Plugin plugin : loadedPlugins) {
+			if (plugin == null) continue;
+			if (plugin.getFile() != null) loadedFiles.add(plugin.getFile().getAbsoluteFile());
+			loadedIDs.add(plugin.getID());
+		}
+		List<DisabledPlugin> result = new ArrayList<>();
+		for (File file : listArchives(pluginsFolder())) {
+			if (loadedFiles.contains(file.getAbsoluteFile())) continue;
+			DisabledPlugin pending = describe(file);
+			if (pending == null || isSelf(pending.id()) || loadedIDs.contains(pending.id())) continue;
+			result.add(pending);
+		}
+		return result;
+	}
+
+	public static Set<String> knownPluginIDs(Collection<Plugin> loadedPlugins,
+			Collection<DisabledPlugin> parkedPlugins, Collection<DisabledPlugin> pendingPlugins) {
+		Set<String> known = new HashSet<>();
+		for (Plugin plugin : loadedPlugins)
+			if (plugin != null && !plugin.isBuiltin()) known.add(plugin.getID());
+		for (DisabledPlugin plugin : parkedPlugins) known.add(plugin.id());
+		for (DisabledPlugin plugin : pendingPlugins) known.add(plugin.id());
+		return known;
 	}
 
 	private static DisabledPlugin describe(File archive) {
